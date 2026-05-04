@@ -1,0 +1,552 @@
+// =================================================================
+// CRAVIX RIDER — PRISMA SCHEMA
+// =================================================================
+// Baseline: BACKEND_REQUIREMENTS.md §9
+// Locked deviations (BACKEND_ALIGNMENT_REVIEW.md §0):
+//   A4 — Two-axis category {freelancer, fulltime} × {student, professional, disabled}
+//   A5 — vehicleType {petrol, ev} AND bikeType {bike, bicycle, scooter, ev}
+//   A6 — Money stored as Decimal(12,2) (rupees, never paise integers, never floats)
+// =================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =================================================================
+// ENUMS
+// =================================================================
+
+enum Category {
+  FREELANCER
+  FULLTIME
+}
+
+enum SubCategory {
+  STUDENT
+  PROFESSIONAL
+  DISABLED
+}
+
+enum VehiclePower {
+  // Locked decision A5 — fuel / powertrain (separate from form factor)
+  PETROL
+  EV
+}
+
+enum BikeType {
+  // Locked decision A5 — form factor
+  BIKE
+  BICYCLE
+  SCOOTER
+  EV
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum KycStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  DISABLED
+}
+
+enum OrderStatus {
+  PENDING
+  ASSIGNED
+  ACCEPTED
+  PICKED_UP
+  EN_ROUTE
+  ARRIVED
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum EarningsType {
+  DELIVERY_EARNING
+  LONG_DISTANCE_BONUS
+  INCENTIVE_BONUS
+  DEDUCTION
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  SETTLED
+  FAILED
+}
+
+enum WalletTransactionType {
+  EARNING
+  WITHDRAWAL
+  BONUS
+  DEDUCTION
+  REFUND
+}
+
+enum BankAccountStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+}
+
+enum NotificationChannel {
+  PUSH
+  IN_APP
+  SMS
+  EMAIL
+}
+
+enum DeviceOS {
+  ANDROID
+  IOS
+}
+
+// =================================================================
+// IDENTITY / RIDER
+// =================================================================
+
+model Rider {
+  id              String    @id @db.Uuid                  // app-generated UUID v7
+  phone           String    @unique @db.VarChar(15)
+  name            String?   @db.VarChar(100)
+  email           String?   @db.VarChar(255)
+  profileImage    String?
+  gender          Gender?
+  dateOfBirth     DateTime? @db.Date
+  rating          Decimal   @default(5.00) @db.Decimal(3, 2)
+  totalDeliveries Int       @default(0)
+  isActive        Boolean   @default(true)
+
+  // KYC
+  kycStatus       KycStatus @default(NOT_STARTED)
+
+  // DPDPA consent (captured on first login)
+  consentVersion  String?   @db.VarChar(16)
+  consentGivenAt  DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime? // soft-delete
+
+  // Relations
+  vehicle              Vehicle?
+  kyc                  KycApplication?
+  address              RiderAddress?
+  orders               Order[]
+  earnings             EarningsTransaction[]
+  walletAccount        WalletAccount?
+  walletTransactions   WalletTransaction[]
+  bankAccounts         BankAccount[]
+  shiftPreferences     ShiftPreference?
+  emergencyContacts    EmergencyContact[]
+  medicalInfo          MedicalInfo?
+  notifications        Notification[]
+  fcmTokens            FcmToken[]
+  locationHistory      LocationHistory[]
+  sosEvents            SosEvent[]
+  supportTickets       SupportTicket[]
+  authEvents           AuthEvent[]
+
+  @@index([phone])
+  @@index([kycStatus])
+  @@index([createdAt])
+}
+
+model RiderAddress {
+  id        String   @id @default(cuid())
+  riderId   String   @unique @db.Uuid
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String   @db.VarChar(10)
+  district  String?
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  updatedAt DateTime @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+}
+
+model Vehicle {
+  id                 String        @id @default(cuid())
+  riderId            String        @unique @db.Uuid
+
+  // Locked decision A5 — both fuel and form factor captured
+  vehicleType        VehiclePower? // PETROL | EV (null if bicycle)
+  bikeType           BikeType?     // BIKE | BICYCLE | SCOOTER | EV
+
+  make               String?       @db.VarChar(50)
+  model              String?       @db.VarChar(50)
+  year               Int?
+  registrationNumber String?       @db.VarChar(15)
+  rcImage            String?
+  bikePhoto          String?
+  insuranceNumber    String?       @db.VarChar(40)
+  insurancePolicy    String?       // S3 URL of insurance policy doc
+  insuranceExpiry    DateTime?
+  updatedAt          DateTime      @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([registrationNumber])
+}
+
+// =================================================================
+// KYC
+// =================================================================
+
+model KycApplication {
+  id           String      @id @default(cuid())
+  riderId      String      @unique @db.Uuid
+
+  // Locked decision A4 — two-axis category
+  category     Category?
+  subCategory  SubCategory?
+
+  // Documents (S3 URLs) — locked decision A3 (spec set)
+  aadhaarFront    String?
+  aadhaarBack     String?
+  panCard         String?
+  drivingLicense  String?
+  selfie          String?
+
+  // Disabled sub-category extra fields
+  disabilityCertNumber String? @db.VarChar(40)
+  disabilityDetails    String? @db.VarChar(600)
+  disabilityProof      String? // S3 URL
+
+  // Student sub-category extra fields
+  collegeName       String?
+  enrollmentNumber  String?
+  collegeIdImage    String?
+
+  rejectionReason   String?
+  reviewerId        String? @db.Uuid
+  submittedAt       DateTime?
+  reviewedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([category, subCategory])
+}
+
+// =================================================================
+// AUTH
+// =================================================================
+
+model AuthEvent {
+  id        String   @id @default(cuid())
+  riderId   String?  @db.Uuid
+  type      String   @db.VarChar(40)  // OTP_SENT | OTP_VERIFIED | OTP_FAILED | REFRESH | LOGOUT | TOKEN_REUSE
+  ip        String?  @db.VarChar(45)
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  rider Rider? @relation(fields: [riderId], references: [id], onDelete: SetNull)
+
+  @@index([riderId, createdAt])
+  @@index([type, createdAt])
+}
+
+// =================================================================
+// ORDERS
+// =================================================================
+
+model Order {
+  id                  String      @id @db.Uuid
+  riderId             String?     @db.Uuid
+  status              OrderStatus @default(PENDING)
+
+  hubName             String
+  hubAddress          String
+  hubLatitude         Decimal     @db.Decimal(10, 7)
+  hubLongitude        Decimal     @db.Decimal(10, 7)
+
+  deliveryAddress     String
+  destLatitude        Decimal     @db.Decimal(10, 7)
+  destLongitude       Decimal     @db.Decimal(10, 7)
+
+  distanceKm          Decimal     @db.Decimal(6, 2)
+  estimatedTimeMin    Int
+
+  // Locked decision A6 — Decimal rupees on the wire, Decimal in DB
+  baseEarnings        Decimal     @db.Decimal(8, 2)
+  bonus               Decimal     @default(0) @db.Decimal(8, 2)
+
+  specialInstructions String?
+  proofImageUrl       String?
+  failureReason       String?
+  rejectionReason     String?
+
+  assignedAt          DateTime?
+  acceptedAt          DateTime?
+  pickedUpAt          DateTime?
+  deliveredAt         DateTime?
+
+  merchantRating      Decimal?    @db.Decimal(3, 2)
+
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  rider              Rider?               @relation(fields: [riderId], references: [id], onDelete: SetNull)
+  items              OrderItem[]
+  earningTransaction EarningsTransaction?
+
+  @@index([riderId, status])
+  @@index([status, createdAt])
+}
+
+model OrderItem {
+  id      String @id @default(cuid())
+  orderId String @db.Uuid
+  name    String
+  qty     Int
+  icon    String
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+// =================================================================
+// EARNINGS / WALLET
+// =================================================================
+
+model EarningsTransaction {
+  id          String            @id @db.Uuid
+  riderId     String            @db.Uuid
+  orderId     String?           @unique @db.Uuid
+  type        EarningsType
+  amount      Decimal           @db.Decimal(10, 2)
+  description String
+  status      TransactionStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+
+  rider Rider  @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([riderId, createdAt])
+  @@index([riderId, type])
+  @@index([status])
+}
+
+model WalletAccount {
+  id                 String   @id @default(cuid())
+  riderId            String   @unique @db.Uuid
+
+  // Locked decision A6 — Decimal rupees
+  totalBalance       Decimal  @default(0) @db.Decimal(12, 2)
+  availableBalance   Decimal  @default(0) @db.Decimal(12, 2)
+  pendingSettlement  Decimal  @default(0) @db.Decimal(12, 2)
+  cashInHand         Decimal  @default(0) @db.Decimal(12, 2)
+
+  updatedAt          DateTime @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+}
+
+model WalletTransaction {
+  id            String                @id @db.Uuid
+  riderId       String                @db.Uuid
+  type          WalletTransactionType
+  amount        Decimal               @db.Decimal(12, 2)
+  balanceAfter  Decimal               @db.Decimal(12, 2)
+  description   String
+  referenceId   String?               // UTR / gateway txn id
+  bankAccountId String?
+  orderId       String?               @db.Uuid
+  status        TransactionStatus     @default(PENDING)
+  createdAt     DateTime              @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, createdAt])
+  @@index([referenceId])
+}
+
+model BankAccount {
+  id                String            @id @default(cuid())
+  riderId           String            @db.Uuid
+  bankName          String            @db.VarChar(80)
+  accountHolderName String            @db.VarChar(80)
+  accountNumberHash String            // bcrypt hash for verification
+  accountNumberLast4 String           @db.VarChar(4)
+  ifscCode          String            @db.VarChar(11)
+  isPrimary         Boolean           @default(false)
+  status            BankAccountStatus @default(PENDING_VERIFICATION)
+  verifiedAt        DateTime?
+  verificationRef   String?           // penny-drop UTR
+  createdAt         DateTime          @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, isPrimary])
+}
+
+// =================================================================
+// SHIFTS
+// =================================================================
+
+model ShiftPreference {
+  id               String   @id @default(cuid())
+  riderId          String   @unique @db.Uuid
+  morningEnabled   Boolean  @default(false)
+  afternoonEnabled Boolean  @default(false)
+  nightEnabled     Boolean  @default(false)
+  windowStart      String   @default("08:00") @db.VarChar(5)
+  windowEnd        String   @default("17:00") @db.VarChar(5)
+  updatedAt        DateTime @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+}
+
+// =================================================================
+// EMERGENCY / MEDICAL
+// =================================================================
+
+model EmergencyContact {
+  id           String   @id @default(cuid())
+  riderId      String   @db.Uuid
+  name         String   @db.VarChar(80)
+  phone        String   @db.VarChar(15)
+  relationship String   @db.VarChar(20)
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId])
+}
+
+model MedicalInfo {
+  id                    String   @id @default(cuid())
+  riderId               String   @unique @db.Uuid
+  bloodGroup            String?  @db.VarChar(4)
+  allergies             String[]
+  medicalConditions     String[]
+  medications           String?
+  insurancePolicyNumber String?
+  updatedAt             DateTime @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+}
+
+model SosEvent {
+  id        String   @id @db.Uuid
+  riderId   String   @db.Uuid
+  type      String   @db.VarChar(20) // accident | medical | safety | other
+  latitude  Decimal  @db.Decimal(10, 7)
+  longitude Decimal  @db.Decimal(10, 7)
+  resolved  Boolean  @default(false)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, createdAt])
+  @@index([resolved, createdAt])
+}
+
+// =================================================================
+// NOTIFICATIONS
+// =================================================================
+
+model Notification {
+  id        String              @id @default(cuid())
+  riderId   String              @db.Uuid
+  type      String              @db.VarChar(40)
+  title     String
+  body      String
+  channel   NotificationChannel @default(IN_APP)
+  isRead    Boolean             @default(false)
+  metadata  Json?
+  createdAt DateTime            @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, isRead])
+  @@index([riderId, createdAt])
+}
+
+model FcmToken {
+  id        String   @id @default(cuid())
+  riderId   String   @db.Uuid
+  token     String   @unique
+  platform  DeviceOS
+  active    Boolean  @default(true)
+  lastSeen  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, active])
+}
+
+// =================================================================
+// LOCATION HISTORY (batched writes from BullMQ — spec §7)
+// =================================================================
+
+model LocationHistory {
+  id        String   @id @default(cuid())
+  riderId   String   @db.Uuid
+  latitude  Decimal  @db.Decimal(10, 7)
+  longitude Decimal  @db.Decimal(10, 7)
+  heading   Decimal? @db.Decimal(5, 2)
+  speed     Decimal? @db.Decimal(5, 2)
+  accuracy  Decimal? @db.Decimal(6, 2)
+  capturedAt DateTime
+  createdAt DateTime @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, capturedAt])
+  @@index([capturedAt])
+}
+
+// =================================================================
+// SUPPORT
+// =================================================================
+
+model SupportTicket {
+  id          String   @id @default(cuid())
+  riderId     String   @db.Uuid
+  category    String   @db.VarChar(20)
+  subject     String   @db.VarChar(200)
+  description String
+  orderId     String?  @db.Uuid
+  status      String   @default("OPEN") @db.VarChar(20)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, status])
+}
+
+model FaqEntry {
+  id        String   @id @default(cuid())
+  category  String   @db.VarChar(20)
+  question  String
+  answer    String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@index([category, order])
+}

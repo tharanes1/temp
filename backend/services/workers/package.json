@@ -1,0 +1,29 @@
+{
+  "name": "@cravix/workers",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@cravix/shared-config": "workspace:*",
+    "@cravix/shared-errors": "workspace:*",
+    "@cravix/shared-logger": "workspace:*",
+    "@cravix/shared-queue": "workspace:*",
+    "@cravix/shared-redis": "workspace:*",
+    "@prisma/client": "^6.0.1",
+    "bullmq": "^5.27.0",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
